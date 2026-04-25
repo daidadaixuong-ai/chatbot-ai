@@ -27,6 +27,7 @@ let messageId = fs.existsSync(FILE)
     : null;
 
 const startTime = Date.now();
+let isChecking = false;
 
 // ⏱ uptime
 function getUptime() {
@@ -63,8 +64,11 @@ function buildEmbed() {
     };
 }
 
-// 🔍 CHECK STATUS THẬT
+// 🔍 CHECK STATUS CHUẨN (VI + EN)
 async function checkStatus() {
+    if (isChecking) return;
+    isChecking = true;
+
     const browser = await puppeteer.launch({
         headless: true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -78,25 +82,54 @@ async function checkStatus() {
             timeout: 60000
         });
 
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 4000));
 
-        const text = await page.evaluate(() => document.body.innerText);
+        const result = await page.evaluate(() => {
+            const text = document.body.innerText;
+
+            function checkCountry(name) {
+                const lines = text.split("\n");
+
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].includes(name)) {
+                        for (let j = i; j < i + 6; j++) {
+                            const line = lines[j] || "";
+
+                            // ✅ TIẾNG VIỆT
+                            if (line.includes("Trạng thái: Có máy")) return true;
+                            if (line.includes("Trạng thái: Hết máy")) return false;
+
+                            // ✅ TIẾNG ANH fallback
+                            if (line.toLowerCase().includes("available")) return true;
+                            if (line.toLowerCase().includes("unavailable")) return false;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            return {
+                sg: checkCountry("Singapore"),
+                hk: checkCountry("Hong Kong"),
+                jp: checkCountry("Japan"),
+                de: checkCountry("Germany"),
+                us: checkCountry("America")
+            };
+        });
 
         currentStatus = {
-            sg: text.includes("Singapore") && text.includes("Available"),
-            hk: text.includes("Hong Kong") && text.includes("Available"),
-            jp: text.includes("Japan") && text.includes("Available"),
-            de: text.includes("Germany") && text.includes("Available"),
-            us: text.includes("America") && text.includes("Available"),
+            ...result,
             lastUpdate: new Date().toISOString()
         };
 
-        console.log("✔ Updated REAL status");
+        console.log("✔ Updated REAL status:", currentStatus);
+
     } catch (err) {
         console.log("❌ Puppeteer lỗi:", err.message);
     }
 
     await browser.close();
+    isChecking = false;
 }
 
 // 📤 WEBHOOK
@@ -116,21 +149,32 @@ async function sendWebhook() {
     }
 }
 
-// 🔁 LOOP
-async function loop() {
-    await checkStatus();
-    await sendWebhook();
+// 🔁 LOOP (không block API)
+function startLoop() {
+    async function run() {
+        await checkStatus();
+        await sendWebhook();
+
+        setTimeout(run, 120000); // 2 phút
+    }
+    run();
 }
 
-setInterval(loop, 120000);
-loop();
+startLoop();
 
-// 🌐 API
+// 🌐 API (tối ưu tốc độ)
 app.get("/api/status", (req, res) => {
+    res.set("Cache-Control", "public, max-age=5");
+
     res.json({
         success: true,
         data: currentStatus
     });
+});
+
+// test
+app.get("/", (req, res) => {
+    res.send("API UGPhone đang chạy!");
 });
 
 app.listen(PORT, () => {
