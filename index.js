@@ -6,7 +6,7 @@ const fs = require("fs");
 const app = express();
 
 // 🔥 CONFIG
-const WEBHOOK_URL = "DAN_WEBHOOK_VAO_DAY";
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ";
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
 
