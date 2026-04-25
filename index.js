@@ -6,7 +6,7 @@ const fs = require("fs");
 const app = express();
 
 // 🔥 CONFIG
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ";
+const WEBHOOK_URL = "";
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
 
@@ -82,29 +82,39 @@ async function checkStatus() {
             timeout: 60000
         });
 
-        await new Promise(r => setTimeout(r, 4000));
+        // đợi render xong (trang này load hơi chậm)
+        await page.waitForSelector("body");
+        await new Promise(r => setTimeout(r, 5000));
 
         const result = await page.evaluate(() => {
-            const text = document.body.innerText;
 
             function checkCountry(name) {
-                const lines = text.split("\n");
+                // tìm mọi phần tử có chứa tên quốc gia
+                const nodes = Array.from(document.querySelectorAll("div, span, p, li"));
 
-                for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].includes(name)) {
-                        for (let j = i; j < i + 6; j++) {
-                            const line = lines[j] || "";
+                for (const node of nodes) {
+                    const text = node.innerText || "";
+                    if (!text.includes(name)) continue;
 
-                            // ✅ TIẾNG VIỆT
-                            if (line.includes("Trạng thái: Có máy")) return true;
-                            if (line.includes("Trạng thái: Hết máy")) return false;
+                    // lấy block cha gần nhất (chứa cả quốc gia + trạng thái)
+                    let parent = node;
+                    for (let i = 0; i < 5; i++) {
+                        if (!parent) break;
+                        const t = parent.innerText || "";
 
-                            // ✅ TIẾNG ANH fallback
-                            if (line.toLowerCase().includes("available")) return true;
-                            if (line.toLowerCase().includes("unavailable")) return false;
-                        }
+                        // Ưu tiên tiếng Việt
+                        if (t.includes("Trạng thái: Có máy")) return true;
+                        if (t.includes("Trạng thái: Hết máy")) return false;
+
+                        // fallback tiếng Anh
+                        const lower = t.toLowerCase();
+                        if (lower.includes("available")) return true;
+                        if (lower.includes("unavailable")) return false;
+
+                        parent = parent.parentElement;
                     }
                 }
+
                 return false;
             }
 
