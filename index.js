@@ -9,7 +9,6 @@ const app = express();
 const WEBHOOK_URL = "https://discord.com/api/webhooks/1488493691323809893/aUZGEgko2nD0qp-orAWjWIr8jctoCCuy-K8Ob3aBo2Gi_CIH9GlMX6kOXJ1lZ4xAnxrZ";
 const URL = "https://hanaminikata.com/status_trial_ugphone";
 const FILE = "message.json";
-
 const PORT = process.env.PORT || 3000;
 
 // 📊 STATUS
@@ -24,27 +23,27 @@ let currentStatus = {
 
 let messageId = null;
 
-// load message id safely
+// load message id safe
 try {
     if (fs.existsSync(FILE)) {
         const raw = JSON.parse(fs.readFileSync(FILE, "utf8"));
         messageId = raw?.id || null;
     }
 } catch (e) {
-    console.log("⚠️ Lỗi đọc message.json, reset id");
     messageId = null;
 }
 
 const startTime = Date.now();
 let isChecking = false;
 
-// ⏱ uptime (sửa đúng)
+let browser;
+
+// ⏱ uptime
 function getUptime() {
     const diff = Date.now() - startTime;
     const d = Math.floor(diff / 86400000);
     const h = Math.floor((diff % 86400000) / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
-
     return `${d}d ${h}h ${m}m`;
 }
 
@@ -55,7 +54,7 @@ function buildEmbed() {
     return {
         embeds: [
             {
-                title: "📱 Trạng thái UGPhone Trial 🏷️",
+                title: "📱 UGPhone Status",
                 color: 0x00bfff,
                 description:
 `🇸🇬 Singapore - ${icon(currentStatus.sg)}
@@ -64,73 +63,81 @@ function buildEmbed() {
 🇩🇪 Germany - ${icon(currentStatus.de)}
 🇺🇸 America - ${icon(currentStatus.us)}
 
-🟢 Còn máy
-🔴 Hết máy
+🟢 Available
+🔴 Unavailable
 
 ⏱ Uptime: ${getUptime()}
-📅 ${new Date().toLocaleDateString("vi-VN")}`,
-                footer: { text: "Auto Updater" }
+📅 ${new Date().toLocaleString("vi-VN")}`,
+                footer: { text: "Auto Checker" }
             }
         ]
     };
 }
 
-// 🔍 CHECK STATUS
+// 🔍 INIT BROWSER (reuse - quan trọng)
+async function initBrowser() {
+    if (browser) return;
+
+    browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage"
+        ]
+    });
+}
+
+// 🔍 CHECK STATUS (FIX MẠNH NHẤT)
 async function checkStatus() {
     if (isChecking) return;
     isChecking = true;
 
-    let browser;
-
     try {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: ["--no-sandbox", "--disable-setuid-sandbox"]
-        });
+        await initBrowser();
 
         const page = await browser.newPage();
 
+        await page.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+        );
+
         await page.goto(URL, {
-            waitUntil: "networkidle2",
+            waitUntil: "networkidle0",
             timeout: 60000
         });
 
-        await page.waitForSelector("body");
-        await page.waitForTimeout(4000);
+        // đợi DOM render thật sự
+        await page.waitForFunction(() =>
+            document.body && document.body.innerText.length > 1000
+        );
+
+        await page.waitForTimeout(5000);
 
         const result = await page.evaluate(() => {
+            const text = document.body.innerText.toLowerCase();
 
-            function getStatus(country) {
-                const all = Array.from(document.querySelectorAll("*"));
+            function check(region) {
+                const idx = text.indexOf(region.toLowerCase());
+                if (idx === -1) return false;
 
-                for (const el of all) {
-                    if (!el.innerText) continue;
-                    if (!el.innerText.includes(country)) continue;
+                const slice = text.slice(idx, idx + 200);
 
-                    const container = el.closest("div");
-                    if (!container) continue;
+                if (slice.includes("có máy")) return true;
+                if (slice.includes("available")) return true;
 
-                    const text = container.innerText;
-
-                    // VI
-                    if (text.includes("Có máy")) return true;
-                    if (text.includes("Hết máy")) return false;
-
-                    // EN fallback
-                    const lower = text.toLowerCase();
-                    if (lower.includes("available")) return true;
-                    if (lower.includes("unavailable")) return false;
-                }
+                if (slice.includes("hết máy")) return false;
+                if (slice.includes("unavailable")) return false;
 
                 return false;
             }
 
             return {
-                sg: getStatus("Singapore"),
-                hk: getStatus("Hong Kong"),
-                jp: getStatus("Japan"),
-                de: getStatus("Germany"),
-                us: getStatus("America")
+                sg: check("Singapore"),
+                hk: check("Hong Kong"),
+                jp: check("Japan"),
+                de: check("Germany"),
+                us: check("America")
             };
         });
 
@@ -139,21 +146,22 @@ async function checkStatus() {
             lastUpdate: new Date().toISOString()
         };
 
-        console.log("✔ Status updated:", currentStatus);
+        console.log("✔ STATUS:", currentStatus);
+
+        await page.close();
 
     } catch (err) {
-        console.log("❌ Check lỗi:", err.message);
-    } finally {
-        if (browser) await browser.close();
-        isChecking = false;
+        console.log("❌ CHECK ERROR:", err.message);
     }
+
+    isChecking = false;
 }
 
-// 📤 WEBHOOK
+// 📤 WEBHOOK (fix crash + reset id nếu lỗi)
 async function sendWebhook() {
-    const data = buildEmbed();
-
     try {
+        const data = buildEmbed();
+
         if (!messageId) {
             const res = await axios.post(WEBHOOK_URL + "?wait=true", data);
             messageId = res.data?.id;
@@ -164,23 +172,25 @@ async function sendWebhook() {
         } else {
             await axios.patch(`${WEBHOOK_URL}/messages/${messageId}`, data);
         }
+
     } catch (err) {
-        console.log("❌ Webhook lỗi:", err.message);
+        console.log("❌ WEBHOOK ERROR:", err.message);
+
+        // reset nếu message bị xoá / lỗi
+        messageId = null;
     }
 }
 
-// 🔁 LOOP
-function startLoop() {
-    async function run() {
-        await checkStatus();
-        await sendWebhook();
+// 🔁 LOOP ổn định
+async function loop() {
+    await checkStatus();
+    await sendWebhook();
 
-        setTimeout(run, 120000); // 2 phút
-    }
-    run();
+    setTimeout(loop, 120000);
 }
 
-startLoop();
+// start
+loop();
 
 // 🌐 API
 app.get("/api/status", (req, res) => {
@@ -193,9 +203,14 @@ app.get("/api/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-    res.send("API UGPhone đang chạy!");
+    res.send("UGPhone API running");
+});
+
+// cleanup khi crash
+process.on("exit", async () => {
+    if (browser) await browser.close();
 });
 
 app.listen(PORT, () => {
-    console.log("Server chạy port " + PORT);
+    console.log("Server running on port " + PORT);
 });
