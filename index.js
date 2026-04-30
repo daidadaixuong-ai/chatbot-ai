@@ -19,6 +19,24 @@ let statusData = {
   lastUpdate: null
 };
 
+// ===== HÀM LẤY CONTENT TỪ MESSAGE (FIX WEBHOOK) =====
+function getContent(message) {
+  let content = message.content;
+
+  // 👉 Nếu là webhook embed
+  if (message.embeds && message.embeds.length > 0) {
+    const embed = message.embeds[0];
+
+    if (embed.description) {
+      content = embed.description;
+    } else if (embed.fields && embed.fields.length > 0) {
+      content = embed.fields.map(f => f.value).join("\n");
+    }
+  }
+
+  return content || "";
+}
+
 // ===== PARSE CHUẨN =====
 function parseContent(content) {
   const lines = content.split("\n");
@@ -52,7 +70,9 @@ function parseContent(content) {
   });
 
   statusData.lastUpdate = new Date().toISOString();
-  console.log("UPDATED:", statusData);
+
+  console.log("==== UPDATED DATA ====");
+  console.log(statusData);
 }
 
 // ===== DISCORD BOT =====
@@ -75,7 +95,11 @@ client.on("ready", async () => {
     const messages = await channel.messages.fetch({ limit: 1 });
 
     messages.forEach(msg => {
-      parseContent(msg.content);
+      const content = getContent(msg);
+
+      console.log("FETCH CONTENT:\n", content);
+
+      if (content) parseContent(content);
     });
 
   } catch (err) {
@@ -87,7 +111,11 @@ client.on("ready", async () => {
 client.on("messageCreate", (message) => {
   if (message.channel.id !== CHANNEL_ID) return;
 
-  parseContent(message.content);
+  const content = getContent(message);
+
+  console.log("NEW MESSAGE:\n", content);
+
+  if (content) parseContent(content);
 });
 
 // START BOT
@@ -95,14 +123,14 @@ client.login(BOT_TOKEN);
 
 // ===== API =====
 
-// test nhanh
+// test
 app.get("/", (req, res) => {
   res.send("API UGPhone RUNNING");
 });
 
-// API chính (tối ưu tốc độ)
+// API chính
 app.get("/status", (req, res) => {
-  res.set("Cache-Control", "no-store"); // 🚀 không cache
+  res.set("Cache-Control", "no-store");
   res.json(statusData);
 });
 
